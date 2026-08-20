@@ -29,22 +29,20 @@ export async function POST() {
     const tokenData = await getAccessToken();
 
     if (!tokenData.access_token) {
-      console.error("Token Error:", tokenData);
-      return NextResponse.json({ error: "Failed to refresh token", tokenData }, { status: 401 });
+      return NextResponse.json({ error: "Failed to refresh token" }, { status: 401 });
     }
 
     const accessToken = tokenData.access_token;
     const playlistId = process.env.SPOTIFY_PLAYLIST_ID;
 
-    // 1. Get queue from Supabase (ordered by votes)
+    // 1. Get queue from Supabase (ordered by creation time for safe processing)
     const { data: queue, error: dbError } = await supabase
       .from("queue")
       .select("*")
-      .order("upvotes", { ascending: false })
       .order("created_at", { ascending: true });
 
     if (dbError || !queue) {
-      return NextResponse.json({ error: "Supabase error", details: dbError }, { status: 500 });
+      return NextResponse.json({ error: "Supabase error" }, { status: 500 });
     }
 
     // 2. Fetch current tracks in Spotify Playlist
@@ -54,15 +52,18 @@ export async function POST() {
     });
     const playlistData = await playlistRes.json();
     
-    // Extract Spotify track IDs currently in the playlist
+    // Extract Spotify track IDs currently in the playlist safely
     const existingSpotifyIds = (playlistData.items || [])
       .map((item: any) => item.track?.id)
       .filter(Boolean);
 
-    // 3. ADD MISSING SONGS TO SPOTIFY PLAYLIST
-    const missingSongs = queue.filter((song) => !existingSpotifyIds.includes(song.spotify_id));
+    // 3. BULLETPROOF ADD: Only grab valid IDs that aren't in Spotify yet
+    const missingSongs = queue.filter(
+      (song) => song.spotify_id && !existingSpotifyIds.includes(song.spotify_id)
+    );
 
     if (missingSongs.length > 0) {
+      // Map to correct URI format
       const urisToAdd = missingSongs.map((song) => `spotify:track:${song.spotify_id}`);
       
       await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
@@ -86,12 +87,13 @@ export async function POST() {
       const currentSpotifyId = nowPlayingData?.item?.id;
 
       if (currentSpotifyId) {
-        // Find if currently playing track is in our queue
-        const currentTrackIndex = queue.findIndex((song) => song.spotify_id === currentSpotifyId);
+        const currentTrack = queue.find((song) => song.spotify_id === currentSpotifyId);
 
-        if (currentTrackIndex > 0) {
-          // Remove all songs that were queued BEFORE the currently playing song
-          const playedSongs = queue.slice(0, currentTrackIndex);
+        if (currentTrack) {
+          // Find songs added BEFORE the current track
+          const playedSongs = queue.filter(
+            (song) => new Date(song.created_at) < new Date(currentTrack.created_at)
+          );
 
           for (const song of playedSongs) {
             // Delete from Spotify playlist
@@ -113,13 +115,8 @@ export async function POST() {
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      addedCount: missingSongs.length,
-      queueLength: queue.length,
-    });
+    return NextResponse.json({ success: true, processed: true });
   } catch (err: any) {
-    console.error("Sync Exception:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
