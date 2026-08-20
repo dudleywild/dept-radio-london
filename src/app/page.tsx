@@ -55,7 +55,7 @@ export default function Home() {
     };
 
     checkNowPlayingAndSync();
-    const interval = setInterval(checkNowPlayingAndSync, 10000);
+    const interval = setInterval(checkNowPlayingAndSync, 30000);
 
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 40);
