@@ -15,11 +15,12 @@ export default function Home() {
 
   // Helper to trigger Spotify sync
   const triggerSpotifySync = async () => {
-    try {
-      await fetch("/api/sync", { method: "POST" });
-    } catch (e) {
-      console.error("Sync trigger error:", e);
-    }
+    // TURNED OFF: Vercel Cron now handles this in the background!
+    //  try {
+    //  await fetch("/api/sync", { method: "POST" });
+    //} catch (e) {
+    //  console.error("Sync trigger error:", e);
+    // }
   };
 
   useEffect(() => {
