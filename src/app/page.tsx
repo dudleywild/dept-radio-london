@@ -118,21 +118,19 @@ export default function Home() {
     }
   };
 
-  // Upvote song
+  // Upvote song using atomic database increment
   const handleUpvote = async (id: string, currentVotes: number) => {
     if (votedSongIds.includes(id)) return;
 
-    const newVotes = currentVotes + 1;
-
-    const { error } = await supabase
-      .from("queue")
-      .update({ upvotes: newVotes })
-      .eq("id", id);
+    // Call the Supabase function to increment upvotes atomically
+    const { error } = await supabase.rpc("increment_upvote", { row_id: id });
 
     if (!error) {
       const updatedVotes = [...votedSongIds, id];
       setVotedSongIds(updatedVotes);
       localStorage.setItem("dept_radio_votes", JSON.stringify(updatedVotes));
+    } else {
+      console.error("Error upvoting track:", error);
     }
   };
 
