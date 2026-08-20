@@ -41,14 +41,14 @@ export default function Home() {
     }
   };
 
-  // Poll Spotify every 10 seconds for currently playing track and weekly wipes
+  // Poll Spotify every 10 seconds for currently playing track, sync queue & weekly wipes
   useEffect(() => {
     fetchQueue();
 
     const checkNowPlayingAndSync = async () => {
       try {
-        await fetch("/api/now-playing");
-        await fetchQueue();
+        await triggerSpotifySync(); // Triggers removal of played songs from Spotify & Supabase
+        await fetchQueue();        // Refreshes UI queue
       } catch (err) {
         console.error("Polling error:", err);
       }
