@@ -29,14 +29,14 @@ export async function POST() {
     const tokenData = await getAccessToken();
 
     if (!tokenData.access_token) {
-      console.error("Sync Error: Failed to get access token", tokenData);
-      return NextResponse.json({ error: "Failed to refresh token", details: tokenData }, { status: 401 });
+      console.error("Token Error:", tokenData);
+      return NextResponse.json({ error: "Failed to refresh token", tokenData }, { status: 401 });
     }
 
     const accessToken = tokenData.access_token;
     const playlistId = process.env.SPOTIFY_PLAYLIST_ID;
 
-    // 1. Fetch current songs in Supabase queue
+    // 1. Get queue from Supabase (ordered by votes)
     const { data: queue, error: dbError } = await supabase
       .from("queue")
       .select("*")
@@ -44,22 +44,27 @@ export async function POST() {
       .order("created_at", { ascending: true });
 
     if (dbError || !queue) {
-      return NextResponse.json({ error: "Database fetch failed", details: dbError }, { status: 500 });
+      return NextResponse.json({ error: "Supabase error", details: dbError }, { status: 500 });
     }
 
-    // 2. Fetch current tracks in Spotify playlist
+    // 2. Fetch current tracks in Spotify Playlist
     const playlistRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
     });
     const playlistData = await playlistRes.json();
-    const spotifyTrackIds = playlistData.items?.map((item: any) => item.track?.id) || [];
+    
+    // Extract Spotify track IDs currently in the playlist
+    const existingSpotifyIds = (playlistData.items || [])
+      .map((item: any) => item.track?.id)
+      .filter(Boolean);
 
     // 3. ADD MISSING SONGS TO SPOTIFY PLAYLIST
-    const songsToAdd = queue.filter((song) => !spotifyTrackIds.includes(song.spotify_id));
+    const missingSongs = queue.filter((song) => !existingSpotifyIds.includes(song.spotify_id));
 
-    if (songsToAdd.length > 0) {
-      const urisToAdd = songsToAdd.map((song) => `spotify:track:${song.spotify_id}`);
+    if (missingSongs.length > 0) {
+      const urisToAdd = missingSongs.map((song) => `spotify:track:${song.spotify_id}`);
+      
       await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
         method: "POST",
         headers: {
@@ -70,7 +75,7 @@ export async function POST() {
       });
     }
 
-    // 4. DELETE PLAYED SONGS FROM SPOTIFY & SUPABASE
+    // 4. CHECK CURRENTLY PLAYING AND DELETE PREVIOUS SONGS
     const nowPlayingRes = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
@@ -81,14 +86,15 @@ export async function POST() {
       const currentSpotifyId = nowPlayingData?.item?.id;
 
       if (currentSpotifyId) {
-        const currentTrackInQueue = queue.find((song) => song.spotify_id === currentSpotifyId);
+        // Find if currently playing track is in our queue
+        const currentTrackIndex = queue.findIndex((song) => song.spotify_id === currentSpotifyId);
 
-        if (currentTrackInQueue) {
-          // Find tracks played before current playing track
-          const playedSongs = queue.filter((song) => song.created_at < currentTrackInQueue.created_at);
+        if (currentTrackIndex > 0) {
+          // Remove all songs that were queued BEFORE the currently playing song
+          const playedSongs = queue.slice(0, currentTrackIndex);
 
           for (const song of playedSongs) {
-            // Remove from Spotify
+            // Delete from Spotify playlist
             await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
               method: "DELETE",
               headers: {
@@ -100,14 +106,18 @@ export async function POST() {
               }),
             });
 
-            // Remove from Supabase Queue
+            // Delete from Supabase queue
             await supabase.from("queue").delete().eq("id", song.id);
           }
         }
       }
     }
 
-    return NextResponse.json({ status: "synced successfully", added: songsToAdd.length });
+    return NextResponse.json({
+      success: true,
+      addedCount: missingSongs.length,
+      queueLength: queue.length,
+    });
   } catch (err: any) {
     console.error("Sync Exception:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
