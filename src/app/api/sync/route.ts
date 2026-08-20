@@ -57,24 +57,29 @@ export async function POST() {
     const existingSpotifyIds = (playlistData.items || []).map((item: any) => item.track?.id).filter(Boolean);
     const missingSongs = queue.filter((song) => song.spotify_id && !existingSpotifyIds.includes(song.spotify_id));
 
-    // 3. Add to Spotify
+    // 3. Add to Spotify in chunks of 100 (Spotify API hard limit per request)
     if (missingSongs.length > 0) {
       const urisToAdd = missingSongs.map((song) => `spotify:track:${song.spotify_id}`);
-      
-      const addRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ uris: urisToAdd }),
-      });
+      const chunkSize = 100;
 
-      const addData = await addRes.json();
+      for (let i = 0; i < urisToAdd.length; i += chunkSize) {
+        const chunk = urisToAdd.slice(i, i + chunkSize);
 
-      // IF SPOTIFY BLOCKS ADDING THE SONGS:
-      if (!addRes.ok) {
-          return NextResponse.json({ error: "Spotify rejected adding the songs", spotifyError: addData });
+        const addRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ uris: chunk }),
+        });
+
+        const addData = await addRes.json();
+
+        // IF SPOTIFY BLOCKS ADDING THE SONGS:
+        if (!addRes.ok) {
+            return NextResponse.json({ error: "Spotify rejected adding the songs", spotifyError: addData });
+        }
       }
     }
 
