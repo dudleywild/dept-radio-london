@@ -5,17 +5,20 @@ export async function GET(request: Request) {
   const code = searchParams.get('code');
 
   if (!code) {
-    return NextResponse.json({ error: 'No authorization code provided by Spotify.' }, { status: 400 });
+    return NextResponse.json({ error: 'No code provided' }, { status: 400 });
   }
 
   const client_id = process.env.SPOTIFY_CLIENT_ID;
   const client_secret = process.env.SPOTIFY_CLIENT_SECRET;
-  const redirect_uri = process.env.SPOTIFY_REDIRECT_URI;
+
+  const host = request.headers.get('host') || '';
+  const protocol = host.includes('localhost') ? 'http' : 'https';
+  const redirect_uri = `${protocol}://${host}/api/auth/callback`;
 
   const basic = Buffer.from(`${client_id}:${client_secret}`).toString('base64');
 
   try {
-    const response = await fetch('https://accounts.spotify.com/api/token', {
+    const res = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
       headers: {
         Authorization: `Basic ${basic}`,
@@ -24,26 +27,23 @@ export async function GET(request: Request) {
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: code,
-        redirect_uri: redirect_uri || '',
+        redirect_uri: redirect_uri,
       }),
     });
 
-    const data = await response.json();
-    
-    // THIS TRAPS THE TOKEN IN YOUR VS CODE TERMINAL
-    console.log("=== SPOTIFY TOKEN CAUGHT ===");
-    console.log(data);
-    console.log("============================");
+    const data = await res.json();
 
-    if (!response.ok) {
-      return NextResponse.json({ error: 'Spotify Token Error', details: data }, { status: response.status });
+    if (data.refresh_token) {
+      return new Response(
+        `<h1>Authorization Successful!</h1>
+        <p>Copy this <b>SPOTIFY_REFRESH_TOKEN</b> into your Vercel Environment Variables:</p>
+        <pre style="background:#eee;padding:15px;border-radius:8px;">${data.refresh_token}</pre>`,
+        { headers: { 'Content-Type': 'text/html' } }
+      );
     }
 
-    return NextResponse.json({
-      message: "Check your VS Code terminal for the token!",
-      refresh_token: data.refresh_token,
-    });
-  } catch (error: any) {
-    return NextResponse.json({ error: 'Failed to complete handshake', message: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

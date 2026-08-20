@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 
-export async function GET() {
+export async function GET(request: Request) {
   const client_id = process.env.SPOTIFY_CLIENT_ID;
-  const redirect_uri = process.env.SPOTIFY_REDIRECT_URI;
+  
+  // Dynamically determine redirect URI based on current request host
+  const host = request.headers.get('host') || '';
+  const protocol = host.includes('localhost') ? 'http' : 'https';
+  const redirect_uri = `${protocol}://${host}/api/auth/callback`;
 
   const scope = 'playlist-modify-public playlist-modify-private user-read-currently-playing';
 
@@ -10,8 +14,7 @@ export async function GET() {
     response_type: 'code',
     client_id: client_id || '',
     scope: scope,
-    redirect_uri: redirect_uri || '',
-    show_dialog: 'true',
+    redirect_uri: redirect_uri,
   });
 
   return NextResponse.redirect(`https://accounts.spotify.com/authorize?${params.toString()}`);
