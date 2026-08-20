@@ -36,63 +36,78 @@ export async function POST() {
     const accessToken = tokenData.access_token;
     const playlistId = process.env.SPOTIFY_PLAYLIST_ID;
 
-    // 1. Get currently playing track from Spotify
-    const nowPlayingRes = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      cache: "no-store",
-    });
-
-    if (nowPlayingRes.status === 204 || nowPlayingRes.status > 400) {
-      return NextResponse.json({ message: "Nothing actively playing on Spotify" });
-    }
-
-    const nowPlayingData = await nowPlayingRes.json();
-    const currentSpotifyId = nowPlayingData?.item?.id;
-
-    if (!currentSpotifyId) {
-      return NextResponse.json({ message: "No active track ID found" });
-    }
-
-    // 2. Fetch all songs currently in Supabase queue
-    const { data: queue, error: dbError } = await supabase.from("queue").select("*");
+    // 1. Fetch current songs in Supabase queue
+    const { data: queue, error: dbError } = await supabase
+      .from("queue")
+      .select("*")
+      .order("upvotes", { ascending: false })
+      .order("created_at", { ascending: true });
 
     if (dbError || !queue) {
       return NextResponse.json({ error: "Database fetch failed", details: dbError }, { status: 500 });
     }
 
-    // 3. Find if current song is in our queue
-    const currentTrackInQueue = queue.find((song) => song.spotify_id === currentSpotifyId);
+    // 2. Fetch current tracks in Spotify playlist
+    const playlistRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    });
+    const playlistData = await playlistRes.json();
+    const spotifyTrackIds = playlistData.items?.map((item: any) => item.track?.id) || [];
 
-    if (currentTrackInQueue) {
-      // Find all songs in queue that came BEFORE this track or aren't current
-      // Delete any song that was played before the current track
-      const playedSongs = queue.filter((song) => song.created_at < currentTrackInQueue.created_at);
+    // 3. ADD MISSING SONGS TO SPOTIFY PLAYLIST
+    const songsToAdd = queue.filter((song) => !spotifyTrackIds.includes(song.spotify_id));
 
-      for (const song of playedSongs) {
-        // Remove from Spotify Playlist
-        await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            tracks: [{ uri: `spotify:track:${song.spotify_id}` }],
-          }),
-        });
-
-        // Remove from Supabase Queue
-        await supabase.from("queue").delete().eq("id", song.id);
-      }
-
-      return NextResponse.json({
-        status: "synced",
-        currentlyPlaying: currentTrackInQueue.title,
-        removedCount: playedSongs.length,
+    if (songsToAdd.length > 0) {
+      const urisToAdd = songsToAdd.map((song) => `spotify:track:${song.spotify_id}`);
+      await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ uris: urisToAdd }),
       });
     }
 
-    return NextResponse.json({ status: "no action needed", currentSpotifyId });
+    // 4. DELETE PLAYED SONGS FROM SPOTIFY & SUPABASE
+    const nowPlayingRes = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    });
+
+    if (nowPlayingRes.status === 200) {
+      const nowPlayingData = await nowPlayingRes.json();
+      const currentSpotifyId = nowPlayingData?.item?.id;
+
+      if (currentSpotifyId) {
+        const currentTrackInQueue = queue.find((song) => song.spotify_id === currentSpotifyId);
+
+        if (currentTrackInQueue) {
+          // Find tracks played before current playing track
+          const playedSongs = queue.filter((song) => song.created_at < currentTrackInQueue.created_at);
+
+          for (const song of playedSongs) {
+            // Remove from Spotify
+            await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                tracks: [{ uri: `spotify:track:${song.spotify_id}` }],
+              }),
+            });
+
+            // Remove from Supabase Queue
+            await supabase.from("queue").delete().eq("id", song.id);
+          }
+        }
+      }
+    }
+
+    return NextResponse.json({ status: "synced successfully", added: songsToAdd.length });
   } catch (err: any) {
     console.error("Sync Exception:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
