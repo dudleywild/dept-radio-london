@@ -13,16 +13,6 @@ export default function Home() {
   
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Helper to trigger Spotify sync
-  const triggerSpotifySync = async () => {
-    // TURNED OFF: Vercel Cron now handles this in the background!
-    //  try {
-    //  await fetch("/api/sync", { method: "POST" });
-    //} catch (e) {
-    //  console.error("Sync trigger error:", e);
-    // }
-  };
-
   useEffect(() => {
     const savedVotes = localStorage.getItem("dept_radio_votes");
     if (savedVotes) {
@@ -42,21 +32,21 @@ export default function Home() {
     }
   };
 
-  // Poll Spotify every 10 seconds for currently playing track, sync queue & weekly wipes
+  // Realtime Listener for Queue updates
   useEffect(() => {
     fetchQueue();
 
-    const checkNowPlayingAndSync = async () => {
-      try {
-        await triggerSpotifySync(); // Triggers removal of played songs from Spotify & Supabase
-        await fetchQueue();        // Refreshes UI queue
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    };
-
-    checkNowPlayingAndSync();
-    const interval = setInterval(checkNowPlayingAndSync, 30000);
+    // Subscribe to realtime database changes (inserts, updates, deletes)
+    const channel = supabase
+      .channel("realtime-queue")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "queue" },
+        () => {
+          fetchQueue();
+        }
+      )
+      .subscribe();
 
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 40);
@@ -72,7 +62,7 @@ export default function Home() {
     document.addEventListener("mousedown", handleClickOutside);
 
     return () => {
-      clearInterval(interval);
+      supabase.removeChannel(channel);
       window.removeEventListener("scroll", handleScroll);
       document.removeEventListener("mousedown", handleClickOutside);
     };
@@ -90,8 +80,6 @@ export default function Home() {
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
-        
-        console.log("Spotify Search Data:", data);
 
         const items = data.tracks?.items || [];
         setSearchResults(items);
@@ -105,7 +93,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Add song to queue & sync
+  // Add song to queue
   const addToQueue = async (track: any) => {
     const newSong = {
       spotify_id: track.id,
@@ -127,12 +115,10 @@ export default function Home() {
       setQuery("");
       setSearchResults([]);
       setIsSearching(false);
-      await fetchQueue();
-      await triggerSpotifySync();
     }
   };
 
-  // Upvote song & sync
+  // Upvote song
   const handleUpvote = async (id: string, currentVotes: number) => {
     if (votedSongIds.includes(id)) return;
 
@@ -147,8 +133,6 @@ export default function Home() {
       const updatedVotes = [...votedSongIds, id];
       setVotedSongIds(updatedVotes);
       localStorage.setItem("dept_radio_votes", JSON.stringify(updatedVotes));
-      await fetchQueue();
-      await triggerSpotifySync();
     }
   };
 
